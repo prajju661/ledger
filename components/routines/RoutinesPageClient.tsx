@@ -1,0 +1,290 @@
+'use client'
+
+import { useState, useCallback } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { RefreshCw, AlertCircle } from 'lucide-react'
+import toast from 'react-hot-toast'
+import { Button } from '@/components/ui/Button'
+import { GlassCard } from '@/components/ui/GlassCard'
+import { RoutineCard } from './RoutineCard'
+import { AddRoutineModal } from './AddRoutineModal'
+import { RoutineDetailDrawer } from './RoutineDetailDrawer'
+import { staggerContainer, fadeInDown } from '@/lib/animations'
+import { isToday, parseISO, addDays, startOfDay, endOfDay } from 'date-fns'
+import type { Routine } from '@/types'
+
+interface RoutinesPageClientProps {
+  initialRoutines: Routine[]
+}
+
+type TabFilter = 'all' | 'today' | 'week' | 'overdue'
+
+const TABS: { value: TabFilter; label: string }[] = [
+  { value: 'all',     label: 'All' },
+  { value: 'today',   label: 'Today' },
+  { value: 'week',    label: 'This Week' },
+  { value: 'overdue', label: 'Overdue' },
+]
+
+function filterRoutines(routines: Routine[], tab: TabFilter): Routine[] {
+  // Use start-of-day for comparisons — next_due is a date-only string (no time),
+  // so comparing against new Date() (which has a time component) can exclude
+  // same-day routines when the current time is after midnight.
+  const todayStart = startOfDay(new Date())
+  const weekEnd    = endOfDay(addDays(todayStart, 7))
+
+  switch (tab) {
+    case 'today':
+      return routines.filter((r) => isToday(parseISO(r.next_due)))
+    case 'week':
+      return routines.filter((r) => {
+        const d = parseISO(r.next_due)
+        return d >= todayStart && d <= weekEnd
+      })
+    case 'overdue':
+      return routines.filter((r) => {
+        const d = parseISO(r.next_due)
+        return d < todayStart && !isToday(d)
+      })
+    default:
+      return routines
+  }
+}
+
+export function RoutinesPageClient({ initialRoutines }: RoutinesPageClientProps) {
+  const [routines,     setRoutines]     = useState<Routine[]>(initialRoutines)
+  const [activeTab,    setActiveTab]    = useState<TabFilter>('all')
+  const [isAddOpen,    setIsAddOpen]    = useState(false)
+  const [editRoutine,  setEditRoutine]  = useState<Routine | null>(null)
+  const [drawerRoutineId, setDrawerRoutineId] = useState<string | null>(null)
+
+  const filteredRoutines = filterRoutines(routines, activeTab)
+  const overdueCount = routines.filter((r) => {
+    const d = parseISO(r.next_due)
+    return d < startOfDay(new Date()) && !isToday(d)
+  }).length
+  const todayCount   = routines.filter((r) => isToday(parseISO(r.next_due))).length
+  const weekCount    = routines.filter((r) => {
+    const d = parseISO(r.next_due)
+    const todayStart = startOfDay(new Date())
+    const weekEnd    = endOfDay(addDays(todayStart, 7))
+    return d >= todayStart && d <= weekEnd
+  }).length
+
+  // ── Optimistic complete ────────────────────────────────────────────────────
+  const handleComplete = useCallback(async (id: string) => {
+    const original = routines.find((r) => r.id === id)
+    if (!original) return
+
+    try {
+      const res = await fetch(`/api/routines/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'complete' }),
+      })
+      const json = await res.json() as { data: { routine: Routine } | null; error: string | null }
+      if (!res.ok || json.error || !json.data) throw new Error(json.error ?? 'Failed to complete.')
+
+      // Update routine with new next_due
+      setRoutines((prev) =>
+        prev.map((r) => (r.id === id ? json.data!.routine : r))
+          .sort((a, b) => a.next_due.localeCompare(b.next_due))
+      )
+      toast.success('Routine completed! 🎉')
+    } catch {
+      toast.error('Failed to mark routine complete.')
+    }
+  }, [routines])
+
+  // ── Optimistic skip ────────────────────────────────────────────────────────
+  const handleSkip = useCallback(async (id: string) => {
+    try {
+      const res = await fetch(`/api/routines/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'skip' }),
+      })
+      const json = await res.json() as { data: { routine: Routine } | null; error: string | null }
+      if (!res.ok || json.error || !json.data) throw new Error(json.error ?? 'Failed to skip.')
+
+      setRoutines((prev) =>
+        prev.map((r) => (r.id === id ? json.data!.routine : r))
+          .sort((a, b) => a.next_due.localeCompare(b.next_due))
+      )
+      toast.success('Routine skipped.')
+    } catch {
+      toast.error('Failed to skip routine.')
+    }
+  }, [])
+
+  // ── Optimistic delete ──────────────────────────────────────────────────────
+  const handleDelete = useCallback(async (id: string) => {
+    const backup = routines.find((r) => r.id === id)
+    setRoutines((prev) => prev.filter((r) => r.id !== id))
+    try {
+      const res = await fetch(`/api/routines/${id}`, { method: 'DELETE' })
+      const json = await res.json() as { data: unknown; error: string | null }
+      if (!res.ok || json.error) throw new Error(json.error ?? 'Delete failed.')
+      toast.success('Routine deleted.')
+    } catch {
+      if (backup) setRoutines((prev) => [...prev, backup].sort((a, b) => a.next_due.localeCompare(b.next_due)))
+      toast.error('Failed to delete routine.')
+    }
+  }, [routines])
+
+  // ── Save (add/edit) ────────────────────────────────────────────────────────
+  const handleSave = useCallback((saved: Routine) => {
+    setRoutines((prev) => {
+      const exists = prev.find((r) => r.id === saved.id)
+      const updated = exists
+        ? prev.map((r) => (r.id === saved.id ? saved : r))
+        : [saved, ...prev]
+      return updated.sort((a, b) => a.next_due.localeCompare(b.next_due))
+    })
+    toast.success(editRoutine ? 'Routine updated!' : 'Routine created!')
+    setEditRoutine(null)
+  }, [editRoutine])
+
+  return (
+    <div className="space-y-6">
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <motion.div
+        variants={fadeInDown} initial="hidden" animate="visible"
+        className="flex items-start justify-between gap-4 flex-wrap"
+      >
+        <div>
+          <h1
+            className="text-2xl font-bold text-text-primary"
+            style={{ textShadow: '0 0 20px rgba(16,185,129,0.3)' }}
+          >
+            Repeat
+          </h1>
+          <p className="text-sm text-text-secondary mt-0.5">
+            Stay on top of recurring responsibilities
+          </p>
+        </div>
+        <Button
+          onClick={() => { setEditRoutine(null); setIsAddOpen(true) }}
+          style={{ background: 'linear-gradient(135deg, #10b981, #059669)' }}
+          className="gap-2 shrink-0"
+        >
+          <RefreshCw size={15} />
+          New Routine
+        </Button>
+      </motion.div>
+
+      {/* ── Summary pills ──────────────────────────────────────────────────── */}
+      <motion.div
+        variants={fadeInDown} initial="hidden" animate="visible"
+        className="flex gap-3 flex-wrap"
+      >
+        {[
+          { label: 'Total',      value: routines.length, color: '#10b981' },
+          { label: 'Due Today',  value: todayCount,      color: '#f59e0b' },
+          { label: 'This Week',  value: weekCount,       color: '#6366f1' },
+        ].map(({ label, value, color }) => (
+          <div
+            key={label}
+            className="px-4 py-2 rounded-full text-sm font-medium glass border"
+            style={{ borderColor: `${color}25`, color }}
+          >
+            {value} {label}
+          </div>
+        ))}
+      </motion.div>
+
+      {/* ── Tab filters ────────────────────────────────────────────────────── */}
+      <div className="flex gap-1 glass rounded-xl p-1 w-fit">
+        {TABS.map((tab) => (
+          <button
+            key={tab.value}
+            onClick={() => setActiveTab(tab.value)}
+            className={`
+              relative px-4 py-1.5 rounded-lg text-sm font-medium transition-all duration-200
+              ${activeTab === tab.value
+                ? 'text-module-routines bg-module-routines/10'
+                : 'text-text-secondary hover:text-text-primary'
+              }
+            `}
+          >
+            {tab.label}
+            {tab.value === 'overdue' && overdueCount > 0 && (
+              <span className="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] bg-error text-white font-bold leading-none">
+                {overdueCount}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* ── List ───────────────────────────────────────────────────────────── */}
+      {routines.length === 0 ? (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-center pt-10">
+          <GlassCard accent="emerald" className="p-12 text-center max-w-sm w-full">
+            <div
+              className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4"
+              style={{ background: 'linear-gradient(135deg, rgba(16,185,129,0.2), rgba(16,185,129,0.08))' }}
+            >
+              <RefreshCw size={28} className="text-module-routines" />
+            </div>
+            <h2 className="text-xl font-semibold text-text-primary mb-2">No routines yet</h2>
+            <p className="text-sm text-text-secondary mb-4">
+              Create your first routine to start tracking recurring tasks.
+            </p>
+            <Button
+              onClick={() => setIsAddOpen(true)}
+              style={{ background: 'linear-gradient(135deg, #10b981, #059669)' }}
+            >
+              + New Routine
+            </Button>
+          </GlassCard>
+        </motion.div>
+      ) : filteredRoutines.length === 0 ? (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-center pt-10">
+          <GlassCard className="p-8 text-center max-w-xs w-full">
+            <AlertCircle size={32} className="text-text-muted mx-auto mb-3" />
+            <p className="text-text-secondary text-sm">
+              No routines match &ldquo;{TABS.find((t) => t.value === activeTab)?.label}&rdquo;.
+            </p>
+          </GlassCard>
+        </motion.div>
+      ) : (
+        <motion.div
+          className="space-y-3"
+          variants={staggerContainer}
+          initial="hidden"
+          animate="visible"
+        >
+          <AnimatePresence mode="popLayout">
+            {filteredRoutines.map((routine) => (
+              <RoutineCard
+                key={routine.id}
+                routine={routine}
+                onComplete={handleComplete}
+                onSkip={handleSkip}
+                onEdit={(r) => { setEditRoutine(r); setIsAddOpen(true) }}
+                onDelete={handleDelete}
+                onViewDetail={setDrawerRoutineId}
+              />
+            ))}
+          </AnimatePresence>
+        </motion.div>
+      )}
+
+      {/* ── Modals ─────────────────────────────────────────────────────────── */}
+      <AddRoutineModal
+        isOpen={isAddOpen}
+        onClose={() => { setIsAddOpen(false); setEditRoutine(null) }}
+        onSave={handleSave}
+        initialData={editRoutine}
+      />
+
+      <RoutineDetailDrawer
+        routineId={drawerRoutineId}
+        onClose={() => setDrawerRoutineId(null)}
+        onEdit={(r) => { setDrawerRoutineId(null); setEditRoutine(r); setIsAddOpen(true) }}
+        onDelete={handleDelete}
+      />
+    </div>
+  )
+}

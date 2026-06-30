@@ -1,24 +1,32 @@
-import { RefreshCw } from 'lucide-react'
+import { createClient } from '@/lib/supabase/server'
 import { PageTransition } from '@/components/layout/PageTransition'
-import { GlassCard } from '@/components/ui/GlassCard'
+import { RoutinesPageClient } from '@/components/routines/RoutinesPageClient'
+import type { Routine } from '@/types'
 
-export default function RoutinesPage() {
+export const metadata = {
+  title: 'Repeat – LifeLedger AI',
+}
+
+export default async function RoutinesPage() {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+
+  let initialRoutines: Routine[] = []
+
+  if (user) {
+    const { data } = await supabase
+      .from('routines')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('is_active', true)
+      .order('next_due', { ascending: true })
+      .limit(100)
+    initialRoutines = data ?? []
+  }
+
   return (
     <PageTransition>
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <GlassCard accent="emerald" className="p-12 text-center max-w-sm w-full">
-          <div
-            className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4"
-            style={{ background: 'linear-gradient(135deg, rgba(16,185,129,0.2), rgba(16,185,129,0.08))' }}
-          >
-            <RefreshCw size={28} className="text-module-routines" />
-          </div>
-          <h2 className="text-xl font-semibold text-text-primary mb-2">Repeat</h2>
-          <p className="text-sm text-text-secondary">
-            Recurring routines with streaks and heatmap coming in Phase 4.
-          </p>
-        </GlassCard>
-      </div>
+      <RoutinesPageClient initialRoutines={initialRoutines} />
     </PageTransition>
   )
 }

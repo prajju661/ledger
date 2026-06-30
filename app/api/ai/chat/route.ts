@@ -1,0 +1,216 @@
+import { NextResponse, type NextRequest } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
+import { openai, AI_MODEL, MAX_TOKENS, TEMPERATURE } from '@/lib/openai/client'
+import { tools }            from '@/lib/ai/tools'
+import { executeTool }      from '@/lib/ai/functionHandlers'
+import { buildSystemPrompt } from '@/lib/ai/systemPrompt'
+import { startOfDay }       from 'date-fns'
+import type OpenAI           from 'openai'
+import type { Intent }       from '@/types'
+
+const DAILY_LIMIT = 50
+
+export async function POST(request: NextRequest) {
+  try {
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return NextResponse.json({ data: null, error: 'Unauthorized.' }, { status: 401 })
+    }
+
+    // ── Rate limit ─────────────────────────────────────────────────────────────
+    const todayStart = startOfDay(new Date()).toISOString()
+    const { count: todayCount } = await supabase
+      .from('chats')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .eq('role', 'user')
+      .gte('created_at', todayStart)
+
+    const usedToday = todayCount ?? 0
+    if (usedToday >= DAILY_LIMIT) {
+      return NextResponse.json(
+        { data: null, error: 'Daily message limit reached (50/day). Try again tomorrow.', remaining: 0 },
+        { status: 429 }
+      )
+    }
+
+    const body = await request.json() as { message?: string; session_id?: string }
+    const message    = body.message?.trim()
+    const session_id = body.session_id ?? crypto.randomUUID()
+
+    if (!message) {
+      return NextResponse.json({ data: null, error: 'Message is required.' }, { status: 400 })
+    }
+
+    // ── User profile for system prompt ─────────────────────────────────────────
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('name')
+      .eq('id', user.id)
+      .single()
+    const userName = profile?.name ?? 'there'
+
+    // ── Conversation history (last 10 msgs in session) ─────────────────────────
+    const { data: history } = await supabase
+      .from('chats')
+      .select('role, message')
+      .eq('session_id', session_id)
+      .order('created_at', { ascending: true })
+      .limit(10)
+
+    const historyMessages: OpenAI.Chat.ChatCompletionMessageParam[] =
+      (history ?? []).map((m) => ({
+        role:    m.role as 'user' | 'assistant',
+        content: m.message,
+      }))
+
+    // ── Build messages array ───────────────────────────────────────────────────
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      { role: 'system', content: buildSystemPrompt(userName) },
+      ...historyMessages,
+      { role: 'user', content: message },
+    ]
+
+    // ── First OpenAI call ──────────────────────────────────────────────────────
+    const firstResponse = await openai.chat.completions.create({
+      model:       AI_MODEL,
+      messages,
+      tools,
+      tool_choice: 'auto',
+      max_tokens:  MAX_TOKENS,
+      temperature: TEMPERATURE,
+    })
+
+    const firstChoice = firstResponse.choices[0]
+    let reply        = ''
+    let intent: Intent = 'general'
+    let metadata: Record<string, unknown> | null = null
+
+    // ── Handle tool call ───────────────────────────────────────────────────────
+    const toolCalls = firstChoice.message.tool_calls
+    if (firstChoice.finish_reason === 'tool_calls' && toolCalls?.length) {
+      const rawCall = toolCalls[0]
+
+      // Only function-type tool calls have a .function property
+      if (rawCall.type === 'function') {
+        const toolName = rawCall.function.name
+        const toolArgs = JSON.parse(rawCall.function.arguments) as Record<string, unknown>
+
+        // Map tool name → intent
+        const intentMap: Record<string, Intent> = {
+          find_item:            'find_item',
+          add_item:             'add_item',
+          create_routine:       'create_routine',
+          check_history:        'check_history',
+          get_pending_routines: 'pending_tasks',
+        }
+        intent = intentMap[toolName] ?? 'general'
+
+        // Execute the tool
+        const toolResult = await executeTool(toolName, toolArgs, user.id)
+
+        // Build metadata from tool result
+        metadata = buildMetadata(toolName, toolResult)
+
+        // ── Second OpenAI call with tool result ──────────────────────────────
+        const toolMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+          ...messages,
+          {
+            role:       'assistant' as const,
+            content:    null,
+            tool_calls: toolCalls,
+          },
+          {
+            role:         'tool' as const,
+            tool_call_id: rawCall.id,
+            content:      JSON.stringify(toolResult),
+          },
+        ]
+
+        const secondResponse = await openai.chat.completions.create({
+          model:       AI_MODEL,
+          messages:    toolMessages,
+          max_tokens:  MAX_TOKENS,
+          temperature: TEMPERATURE,
+        })
+
+        reply = secondResponse.choices[0].message.content ?? ''
+      } else {
+        // Custom tool — fallback to plain response
+        reply = firstChoice.message.content ?? ''
+      }
+    } else {
+      // No tool call — plain conversational response
+      reply = firstChoice.message.content ?? ''
+    }
+
+    // ── Save messages to DB ────────────────────────────────────────────────────
+    await supabase.from('chats').insert([
+      {
+        user_id:    user.id,
+        session_id,
+        role:       'user',
+        message,
+        created_at: new Date().toISOString(),
+      },
+      {
+        user_id:    user.id,
+        session_id,
+        role:       'assistant',
+        message:    reply,
+        intent,
+        metadata,
+        created_at: new Date().toISOString(),
+      },
+    ])
+
+    const remaining = Math.max(0, DAILY_LIMIT - (usedToday + 1))
+
+    return NextResponse.json({
+      data: { reply, intent, metadata, session_id, remaining },
+      error: null,
+    })
+  } catch (err) {
+    console.error('[AI Chat Error]', err)
+    return NextResponse.json(
+      { data: null, error: 'Failed to get AI response. Please try again.' },
+      { status: 500 }
+    )
+  }
+}
+
+// ── Metadata builder ───────────────────────────────────────────────────────────
+
+function buildMetadata(toolName: string, result: unknown): Record<string, unknown> | null {
+  if (!result) return null
+
+  if (toolName === 'find_item') {
+    const items = result as { id: string }[]
+    if (!items?.length) return { type: 'not_found' }
+    return { type: 'items', data: items }
+  }
+
+  if (toolName === 'add_item') {
+    if (!result) return { type: 'not_found' }
+    return { type: 'item_added', data: result }
+  }
+
+  if (toolName === 'create_routine') {
+    if (!result) return { type: 'not_found' }
+    return { type: 'routine', data: result }
+  }
+
+  if (toolName === 'check_history') {
+    const r = result as { found: boolean; logs: unknown[]; lastOccurrence?: unknown }
+    if (!r?.found) return { type: 'not_found' }
+    return { type: 'log_result', data: r.lastOccurrence ?? r.logs[0] }
+  }
+
+  if (toolName === 'get_pending_routines') {
+    const routines = result as unknown[]
+    return { type: 'routines_list', data: routines }
+  }
+
+  return null
+}

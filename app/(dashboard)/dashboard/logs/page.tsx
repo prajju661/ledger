@@ -1,24 +1,45 @@
-import { BookOpen } from 'lucide-react'
+import { createClient } from '@/lib/supabase/server'
 import { PageTransition } from '@/components/layout/PageTransition'
-import { GlassCard } from '@/components/ui/GlassCard'
+import { LogsPageClient } from '@/components/logs/LogsPageClient'
+import type { ActivityLog } from '@/types'
 
-export default function LogsPage() {
+export const metadata = {
+  title: 'LifeLog – LifeLedger AI',
+}
+
+interface StatsData {
+  byMonth:    { month: string; count: number }[]
+  byCategory: { category: string; count: number }[]
+  heatmap:    { date: string; count: number }[]
+  summary: {
+    total: number
+    mostActiveMonth: string
+    topCategory:     string | null
+    longestStreak:   number
+  }
+}
+
+export default async function LogsPage() {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+
+  let initialLogs: ActivityLog[] = []
+  const initialStats: StatsData | null = null
+
+  if (user) {
+    // Fetch initial logs (last 50)
+    const { data } = await supabase
+      .from('activity_logs')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('completed_at', { ascending: false })
+      .limit(50)
+    initialLogs = data ?? []
+  }
+
   return (
     <PageTransition>
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <GlassCard accent="amber" className="p-12 text-center max-w-sm w-full">
-          <div
-            className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4"
-            style={{ background: 'linear-gradient(135deg, rgba(245,158,11,0.2), rgba(245,158,11,0.08))' }}
-          >
-            <BookOpen size={28} className="text-module-logs" />
-          </div>
-          <h2 className="text-xl font-semibold text-text-primary mb-2">LifeLog</h2>
-          <p className="text-sm text-text-secondary">
-            Activity timeline and stats charts coming in Phase 4.
-          </p>
-        </GlassCard>
-      </div>
+      <LogsPageClient initialLogs={initialLogs} initialStats={initialStats} />
     </PageTransition>
   )
 }
