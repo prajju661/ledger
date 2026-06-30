@@ -123,7 +123,7 @@ function HeroSection() {
         <motion.div variants={fadeInUp} className="flex justify-center mb-6">
           <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full glass text-xs font-medium text-accent-glow border-accent-primary/20">
             <Sparkles size={12} className="text-accent-primary" />
-            Powered by OpenAI · Built for real life
+            Powered by Gemini · Built for real life
           </span>
         </motion.div>
 

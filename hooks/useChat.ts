@@ -114,7 +114,8 @@ export function useChat(initialRemaining = 50): UseChatReturn {
     setMessages([])
     setSessionId(null)
     setError(null)
-  }, [])
+    setRemaining(initialRemaining)
+  }, [initialRemaining])
 
   return { messages, sessionId, isLoading, error, remaining, sendMessage, loadSession, newSession }
 }

@@ -21,23 +21,26 @@ export function AiChatPageClient({
   userName,
   initialMessage,
 }: AiChatPageClientProps) {
-  const [sessions,         setSessions]         = useState(initialSessions)
-  const [activeSessionId,  setActiveSessionId]  = useState<string | null>(null)
+  const [sessions,          setSessions]          = useState(initialSessions)
+  const [activeSessionId,   setActiveSessionId]   = useState<string | null>(null)
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
+  // Incrementing this remounts ChatArea, giving a guaranteed clean slate
+  const [chatKey,           setChatKey]           = useState(0)
 
   const handleNewChat = useCallback(() => {
     setActiveSessionId(null)
     setSelectedSessionId(null)
+    setChatKey((k) => k + 1)
   }, [])
 
   const handleSelectSession = useCallback((sid: string) => {
     setSelectedSessionId(sid)
     setActiveSessionId(sid)
+    setChatKey((k) => k + 1)
   }, [])
 
   const handleSessionCreated = useCallback((sid: string) => {
     setActiveSessionId(sid)
-    // Add to sessions list if not already present
     setSessions((prev) => {
       const exists = prev.some((s) => s.session_id === sid)
       if (exists) return prev
@@ -49,7 +52,6 @@ export function AiChatPageClient({
   }, [])
 
   return (
-    // -m-6 bleeds to layout edges, h-[calc(100vh-64px)] fills below the TopBar
     <div className="flex -m-6 h-[calc(100vh-64px)]">
       <ChatSidebar
         sessions={sessions}
@@ -58,6 +60,7 @@ export function AiChatPageClient({
         onNewChat={handleNewChat}
       />
       <ChatArea
+        key={chatKey}
         userName={userName}
         initialSessionId={selectedSessionId}
         initialMessage={initialMessage}

@@ -36,13 +36,14 @@ export function ChatArea({
   const autoSentRef       = useRef(false)
   const prevSessionId     = useRef<string | null>(null)
 
-  // Load initial session if provided
+  // Load the selected session once on mount (ChatArea is remounted on each
+  // New Chat or session switch via the key prop in AiChatPageClient)
   useEffect(() => {
     if (initialSessionId) {
       void loadSession(initialSessionId)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialSessionId])
+  }, [])
 
   // Auto-send ?message= param exactly once on mount
   useEffect(() => {
@@ -51,7 +52,7 @@ export function ChatArea({
       void sendMessage(initialMessage)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMessage])
+  }, [])
 
   // Notify parent when a new session is created
   useEffect(() => {

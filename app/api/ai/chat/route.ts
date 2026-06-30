@@ -1,12 +1,20 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
-import { openai, AI_MODEL, MAX_TOKENS, TEMPERATURE } from '@/lib/openai/client'
-import { tools }            from '@/lib/ai/tools'
-import { executeTool }      from '@/lib/ai/functionHandlers'
+import { createClient }      from '@/lib/supabase/server'
+import { AI_MODEL, MAX_TOKENS, TEMPERATURE } from '@/lib/openai/client'
+import { tools }             from '@/lib/ai/tools'
+import { executeTool }       from '@/lib/ai/functionHandlers'
 import { buildSystemPrompt } from '@/lib/ai/systemPrompt'
-import { startOfDay }       from 'date-fns'
-import type OpenAI           from 'openai'
+import {
+  generateWithTools,
+  generateWithToolResult,
+  buildGeminiTools,
+} from '@/lib/ai/gemini'
+import { startOfDay }        from 'date-fns'
 import type { Intent }       from '@/types'
+
+// Suppress unused-var warnings — these constants are exported from the client
+// shim for consumers; the route uses them via the gemini layer defaults.
+void AI_MODEL; void MAX_TOKENS; void TEMPERATURE
 
 const DAILY_LIMIT = 50
 
@@ -59,90 +67,60 @@ export async function POST(request: NextRequest) {
       .order('created_at', { ascending: true })
       .limit(10)
 
-    const historyMessages: OpenAI.Chat.ChatCompletionMessageParam[] =
-      (history ?? []).map((m) => ({
-        role:    m.role as 'user' | 'assistant',
-        content: m.message,
-      }))
+    const historyMessages = (history ?? []).map((m) => ({
+      role:    m.role as 'user' | 'assistant',
+      content: m.message,
+    }))
 
-    // ── Build messages array ───────────────────────────────────────────────────
-    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: 'system', content: buildSystemPrompt(userName) },
-      ...historyMessages,
-      { role: 'user', content: message },
-    ]
+    const systemPrompt  = buildSystemPrompt(userName)
+    const geminiTools   = buildGeminiTools(tools)
 
-    // ── First OpenAI call ──────────────────────────────────────────────────────
-    const firstResponse = await openai.chat.completions.create({
-      model:       AI_MODEL,
-      messages,
-      tools,
-      tool_choice: 'auto',
-      max_tokens:  MAX_TOKENS,
-      temperature: TEMPERATURE,
-    })
+    // ── First Gemini call ──────────────────────────────────────────────────────
+    const firstResult = await generateWithTools(
+      systemPrompt,
+      historyMessages,
+      message,
+      geminiTools,
+    )
 
-    const firstChoice = firstResponse.choices[0]
     let reply        = ''
     let intent: Intent = 'general'
     let metadata: Record<string, unknown> | null = null
 
     // ── Handle tool call ───────────────────────────────────────────────────────
-    const toolCalls = firstChoice.message.tool_calls
-    if (firstChoice.finish_reason === 'tool_calls' && toolCalls?.length) {
-      const rawCall = toolCalls[0]
+    if (firstResult.toolName && firstResult.toolArgs) {
+      const toolName = firstResult.toolName
+      const toolArgs = firstResult.toolArgs
 
-      // Only function-type tool calls have a .function property
-      if (rawCall.type === 'function') {
-        const toolName = rawCall.function.name
-        const toolArgs = JSON.parse(rawCall.function.arguments) as Record<string, unknown>
-
-        // Map tool name → intent
-        const intentMap: Record<string, Intent> = {
-          find_item:            'find_item',
-          add_item:             'add_item',
-          create_routine:       'create_routine',
-          check_history:        'check_history',
-          get_pending_routines: 'pending_tasks',
-        }
-        intent = intentMap[toolName] ?? 'general'
-
-        // Execute the tool
-        const toolResult = await executeTool(toolName, toolArgs, user.id)
-
-        // Build metadata from tool result
-        metadata = buildMetadata(toolName, toolResult)
-
-        // ── Second OpenAI call with tool result ──────────────────────────────
-        const toolMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-          ...messages,
-          {
-            role:       'assistant' as const,
-            content:    null,
-            tool_calls: toolCalls,
-          },
-          {
-            role:         'tool' as const,
-            tool_call_id: rawCall.id,
-            content:      JSON.stringify(toolResult),
-          },
-        ]
-
-        const secondResponse = await openai.chat.completions.create({
-          model:       AI_MODEL,
-          messages:    toolMessages,
-          max_tokens:  MAX_TOKENS,
-          temperature: TEMPERATURE,
-        })
-
-        reply = secondResponse.choices[0].message.content ?? ''
-      } else {
-        // Custom tool — fallback to plain response
-        reply = firstChoice.message.content ?? ''
+      // Map tool name → intent
+      const intentMap: Record<string, Intent> = {
+        find_item:            'find_item',
+        add_item:             'add_item',
+        create_routine:       'create_routine',
+        check_history:        'check_history',
+        get_pending_routines: 'pending_tasks',
       }
+      intent = intentMap[toolName] ?? 'general'
+
+      // Execute the tool
+      const toolResult = await executeTool(toolName, toolArgs, user.id)
+
+      // Build metadata from tool result
+      metadata = buildMetadata(toolName, toolResult)
+
+      // ── Second Gemini call with tool result ────────────────────────────────
+      const secondResult = await generateWithToolResult(
+        systemPrompt,
+        historyMessages,
+        message,
+        toolName,
+        toolResult,
+      )
+
+      reply = secondResult.reply
     } else {
       // No tool call — plain conversational response
-      reply = firstChoice.message.content ?? ''
+      reply = firstResult.reply
     }
 
     // ── Save messages to DB ────────────────────────────────────────────────────
@@ -176,21 +154,21 @@ export async function POST(request: NextRequest) {
 
     // Surface meaningful errors to the client
     if (err instanceof Error) {
-      // OpenAI quota / billing error
+      // Gemini quota / billing error
       if (err.message.includes('429') || err.message.toLowerCase().includes('quota')) {
         return NextResponse.json(
-          { data: null, error: 'AI service is temporarily unavailable (quota exceeded). Please try again later or check your OpenAI billing.' },
+          { data: null, error: 'AI service is temporarily unavailable (quota exceeded). Please try again later.' },
           { status: 503 }
         )
       }
-      // OpenAI auth error
+      // Gemini auth error
       if (err.message.includes('401') || err.message.toLowerCase().includes('invalid api key')) {
         return NextResponse.json(
           { data: null, error: 'AI service configuration error. Please contact support.' },
           { status: 503 }
         )
       }
-      // OpenAI rate limit
+      // Gemini rate limit
       if (err.message.includes('rate limit') || err.message.includes('rate_limit')) {
         return NextResponse.json(
           { data: null, error: 'Too many requests. Please wait a moment and try again.' },

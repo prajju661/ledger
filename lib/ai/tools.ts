@@ -1,6 +1,19 @@
-import type OpenAI from 'openai'
+/**
+ * Tool definitions shared by the AI service layer.
+ * These use the OpenAI function-calling schema format, which the Gemini
+ * service layer converts to Gemini FunctionDeclarations before each call.
+ */
 
-export const tools: OpenAI.Chat.ChatCompletionTool[] = [
+export interface AITool {
+  type: 'function'
+  function: {
+    name:        string
+    description: string
+    parameters:  Record<string, unknown>
+  }
+}
+
+export const tools: AITool[] = [
   {
     type: 'function',
     function: {

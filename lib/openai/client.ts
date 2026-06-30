@@ -1,9 +1,6 @@
-import OpenAI from 'openai'
-
-export const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-})
-
-export const AI_MODEL   = process.env.OPENAI_MODEL || 'gpt-4o-mini'
-export const MAX_TOKENS = 500
-export const TEMPERATURE = 0.7
+/**
+ * Re-exports the AI constants from the Gemini service layer.
+ * This file is kept so existing imports in app/api/ai/chat/route.ts
+ * continue to resolve without a path change.
+ */
+export { GEMINI_MODEL as AI_MODEL, MAX_TOKENS, TEMPERATURE } from '@/lib/ai/gemini'
