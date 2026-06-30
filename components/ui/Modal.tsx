@@ -4,7 +4,7 @@ import { useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { scaleIn, mobileSheet } from '@/lib/animations'
+import { scaleIn } from '@/lib/animations'
 import { Button } from './Button'
 
 interface ModalProps {
