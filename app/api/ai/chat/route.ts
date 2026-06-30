@@ -173,6 +173,32 @@ export async function POST(request: NextRequest) {
     })
   } catch (err) {
     console.error('[AI Chat Error]', err)
+
+    // Surface meaningful errors to the client
+    if (err instanceof Error) {
+      // OpenAI quota / billing error
+      if (err.message.includes('429') || err.message.toLowerCase().includes('quota')) {
+        return NextResponse.json(
+          { data: null, error: 'AI service is temporarily unavailable (quota exceeded). Please try again later or check your OpenAI billing.' },
+          { status: 503 }
+        )
+      }
+      // OpenAI auth error
+      if (err.message.includes('401') || err.message.toLowerCase().includes('invalid api key')) {
+        return NextResponse.json(
+          { data: null, error: 'AI service configuration error. Please contact support.' },
+          { status: 503 }
+        )
+      }
+      // OpenAI rate limit
+      if (err.message.includes('rate limit') || err.message.includes('rate_limit')) {
+        return NextResponse.json(
+          { data: null, error: 'Too many requests. Please wait a moment and try again.' },
+          { status: 429 }
+        )
+      }
+    }
+
     return NextResponse.json(
       { data: null, error: 'Failed to get AI response. Please try again.' },
       { status: 500 }

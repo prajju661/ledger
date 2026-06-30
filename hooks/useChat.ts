@@ -54,6 +54,10 @@ export function useChat(initialRemaining = 50): UseChatReturn {
       const json = await res.json() as { data: SendResult | null; error: string | null; remaining?: number }
 
       if (!res.ok || json.error || !json.data) {
+        // On rate-limit (429), update the remaining counter from top-level field
+        if (res.status === 429 && typeof json.remaining === 'number') {
+          setRemaining(json.remaining)
+        }
         throw new Error(json.error ?? 'AI request failed')
       }
 

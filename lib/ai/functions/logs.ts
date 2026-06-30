@@ -36,14 +36,15 @@ export async function searchActivityHistory(
     )
   }
 
-  // Apply time filter
-  if (timeFilter === 'week') {
+  // Apply time filter — values match the tool's enum: this_week, this_month, this_year, all_time
+  if (timeFilter === 'this_week') {
     dbQuery = dbQuery.gte('completed_at', subDays(now, 7).toISOString())
-  } else if (timeFilter === 'month') {
+  } else if (timeFilter === 'this_month') {
     dbQuery = dbQuery.gte('completed_at', subMonths(now, 1).toISOString())
-  } else if (timeFilter === 'year') {
+  } else if (timeFilter === 'this_year') {
     dbQuery = dbQuery.gte('completed_at', subMonths(now, 12).toISOString())
   }
+  // 'all_time' = no additional filter (default)
 
   const { data, error } = await dbQuery
     .order('completed_at', { ascending: false })
