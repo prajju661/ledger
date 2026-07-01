@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback } from 'react'
+import { PageTransition } from '@/components/layout/PageTransition'
 import { ChatSidebar } from './ChatSidebar'
 import { ChatArea }    from './ChatArea'
 
@@ -52,6 +53,7 @@ export function AiChatPageClient({
   }, [])
 
   return (
+    <PageTransition>
     <div className="flex -m-6 h-[calc(100vh-64px)]">
       <ChatSidebar
         sessions={sessions}
@@ -67,5 +69,6 @@ export function AiChatPageClient({
         onSessionCreated={handleSessionCreated}
       />
     </div>
+    </PageTransition>
   )
 }

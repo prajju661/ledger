@@ -23,7 +23,9 @@ export async function PUT(request: NextRequest, context: RouteContext) {
 
     // ── Mode 2: complete or skip action ──────────────────────────────────────
     if (body.action === 'complete' || body.action === 'skip') {
-      const action = body.action as 'complete' | 'skip'
+      // DB constraint requires 'completed' | 'skipped' — map from the API verb
+      const action: 'completed' | 'skipped' =
+        body.action === 'complete' ? 'completed' : 'skipped'
 
       // 1. Fetch the routine (verify ownership)
       const { data: routine, error: fetchError } = await supabase
@@ -48,7 +50,11 @@ export async function PUT(request: NextRequest, context: RouteContext) {
         })
 
       if (insertError) {
-        return NextResponse.json({ data: null, error: insertError.message }, { status: 500 })
+        console.error('[routines/complete] insert error:', insertError)
+        return NextResponse.json(
+          { data: null, error: `Could not save completion: ${insertError.message}` },
+          { status: 500 }
+        )
       }
 
       // 3. Calculate new next_due
@@ -59,17 +65,21 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       )
       const newNextDue = format(nextDueDate, 'yyyy-MM-dd')
 
-      // 4. Update the routine
+      // 4. Update the routine's next_due (no updated_at — let the DB trigger handle it)
       const { data: updated, error: updateError } = await supabase
         .from('routines')
-        .update({ next_due: newNextDue, updated_at: new Date().toISOString() })
+        .update({ next_due: newNextDue })
         .eq('id', id)
         .eq('user_id', user.id)
         .select()
         .single<Routine>()
 
       if (updateError) {
-        return NextResponse.json({ data: null, error: updateError.message }, { status: 500 })
+        console.error('[routines/complete] update error:', updateError)
+        return NextResponse.json(
+          { data: null, error: `Could not update routine: ${updateError.message}` },
+          { status: 500 }
+        )
       }
 
       return NextResponse.json({ data: { routine: updated }, error: null })

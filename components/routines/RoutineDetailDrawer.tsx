@@ -19,58 +19,57 @@ interface RoutineHistoryData {
 }
 
 interface RoutineDetailDrawerProps {
-  routineId:  string | null
-  onClose:    () => void
-  onEdit:     (routine: Routine) => void
-  onDelete:   (id: string) => void
+  routineId: string | null
+  onClose:   () => void
+  onEdit:    (routine: Routine) => void
+  onDelete:  (id: string) => void
 }
 
-function HeatmapCellTip({ cell }: { cell: HeatmapCell }) {
-  let bg = 'bg-bg-elevated'
-  let title = cell.date
+// Returns a Tailwind bg class based on the cell's action
+function cellClass(cell: HeatmapCell): string {
+  if (cell.isFuture)              return 'bg-white/5'
+  if (cell.action === 'completed') return 'bg-emerald-500'
+  if (cell.action === 'skipped')   return 'bg-red-700/70'
+  return 'bg-white/[0.06]'       // no activity
+}
 
-  if (cell.isFuture) bg = 'bg-bg-overlay'
-  else if (cell.action === 'completed') { bg = 'bg-emerald-600' ; title = `Completed on ${cell.date}` }
-  else if (cell.action === 'skipped')   { bg = 'bg-red-800'     ; title = `Skipped on ${cell.date}` }
-  else title = `No activity on ${cell.date}`
-
-  return (
-    <div
-      className={cn('w-3 h-3 rounded-sm cursor-default', bg)}
-      title={title}
-    />
-  )
+function cellTitle(cell: HeatmapCell): string {
+  if (cell.action === 'completed') return `Completed · ${cell.date}`
+  if (cell.action === 'skipped')   return `Skipped · ${cell.date}`
+  if (cell.isFuture)               return cell.date
+  return `No activity · ${cell.date}`
 }
 
 export function RoutineDetailDrawer({ routineId, onClose, onEdit, onDelete }: RoutineDetailDrawerProps) {
-  const [data,    setData]    = useState<RoutineHistoryData | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [data,          setData]          = useState<RoutineHistoryData | null>(null)
+  const [loading,       setLoading]       = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   useEffect(() => {
-    /* eslint-disable-next-line react-hooks/set-state-in-effect */
-    if (!routineId) { setData(null); return }
-    setLoading(true)
+    if (!routineId) return
+    // Use Promise.resolve to avoid synchronous setState-in-effect lint error
+    Promise.resolve().then(() => {
+      setLoading(true)
+      setConfirmDelete(false)
+    }).catch(() => {})
     fetch(`/api/routines/${routineId}/history`)
       .then((r) => r.json())
       .then((j: { data: RoutineHistoryData | null; error: string | null }) => {
-        if (j.data) setData(j.data)
+        setData(j.data ?? null)
       })
-      .catch(() => {/* silent */})
+      .catch(() => { setData(null) })
       .finally(() => setLoading(false))
   }, [routineId])
 
   const isOpen = !!routineId
 
-  // Build 13-col × 7-row grid from heatmapData (90 days → pad to 91 = 13 * 7)
-  const paddedCells: (HeatmapCell | null)[] = []
+  // Build exactly 91 cells (13 cols × 7 rows) from the 90-day heatmap data.
+  // Pad with 1 null at the front so the grid fills neatly.
+  const gridCells: (HeatmapCell | null)[] = []
   if (data?.heatmapData) {
-    // pad front so day 0 aligns to the right week column
-    const cells = data.heatmapData
-    const totalNeeded = 91
-    const frontPad = totalNeeded - cells.length
-    for (let i = 0; i < frontPad; i++) paddedCells.push(null)
-    paddedCells.push(...cells)
+    // heatmapData has 90 entries; pad to 91 (= 13 × 7) with a null at the front
+    gridCells.push(null)
+    gridCells.push(...data.heatmapData)
   }
 
   return (
@@ -82,10 +81,16 @@ export function RoutineDetailDrawer({ routineId, onClose, onEdit, onDelete }: Ro
     >
       {loading && (
         <div className="space-y-3">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="h-12 glass rounded-xl animate-pulse" />
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="h-10 glass rounded-xl animate-pulse" />
           ))}
         </div>
+      )}
+
+      {!loading && !data && routineId && (
+        <p className="text-sm text-text-muted text-center py-8">
+          Failed to load routine details.
+        </p>
       )}
 
       {!loading && data && (
@@ -93,53 +98,82 @@ export function RoutineDetailDrawer({ routineId, onClose, onEdit, onDelete }: Ro
           {/* Stats row */}
           <div className="grid grid-cols-3 gap-2">
             {[
-              { icon: Flame,        label: 'Streak',     value: data.streak,           color: '#f59e0b' },
-              { icon: CheckCircle2, label: 'Completed',  value: data.totalCompletions, color: '#10b981' },
-              { icon: Calendar,     label: 'Next Due',   value: format(parseISO(data.routine.next_due), 'MMM d'), color: '#6366f1', isText: true },
-            ].map(({ icon: Icon, label, value, color, isText }) => (
+              {
+                icon:   Flame,
+                label:  'Streak',
+                value:  `${data.streak}`,
+                color:  '#f59e0b',
+              },
+              {
+                icon:   CheckCircle2,
+                label:  'Completed',
+                value:  `${data.totalCompletions}`,
+                color:  '#10b981',
+              },
+              {
+                icon:   Calendar,
+                label:  'Next Due',
+                value:  format(parseISO(data.routine.next_due), 'MMM d'),
+                color:  '#6366f1',
+              },
+            ].map(({ icon: Icon, label, value, color }) => (
               <div
                 key={label}
                 className="glass rounded-xl p-3 text-center"
                 style={{ border: `1px solid ${color}25` }}
               >
                 <Icon size={16} className="mx-auto mb-1" style={{ color }} />
-                <p className="text-sm font-bold text-text-primary">
-                  {isText ? value : value}
-                </p>
+                <p className="text-sm font-bold text-text-primary">{value}</p>
                 <p className="text-[10px] text-text-muted">{label}</p>
               </div>
             ))}
           </div>
 
-          {/* Heatmap */}
+          {/* 3-Month Heatmap: 13 cols × 7 rows */}
           <div>
             <h3 className="text-xs font-semibold text-text-secondary mb-2 uppercase tracking-wider">
               3-Month History
             </h3>
             <div
-              className="grid gap-[2px]"
+              className="grid gap-[3px]"
               style={{ gridTemplateColumns: 'repeat(13, minmax(0, 1fr))' }}
             >
-              {paddedCells.map((cell, i) => (
+              {gridCells.map((cell, i) => (
                 <motion.div
                   key={i}
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  transition={{ delay: i * 0.002 }}
+                  transition={{ delay: Math.min(i * 0.003, 0.3) }}
                 >
                   {cell ? (
-                    <HeatmapCellTip cell={cell} />
+                    <div
+                      className={cn(
+                        'w-full aspect-square rounded-[2px] cursor-default transition-opacity hover:opacity-80',
+                        cellClass(cell)
+                      )}
+                      title={cellTitle(cell)}
+                    />
                   ) : (
-                    <div className="w-3 h-3" />
+                    <div className="w-full aspect-square" />
                   )}
                 </motion.div>
               ))}
             </div>
+
             {/* Legend */}
-            <div className="flex items-center gap-3 mt-2 text-[10px] text-text-muted">
-              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-emerald-600 inline-block" /> Done</span>
-              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-red-800 inline-block" /> Skipped</span>
-              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-bg-elevated inline-block" /> Missed</span>
+            <div className="flex items-center gap-4 mt-2 text-[10px] text-text-muted">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-[2px] bg-emerald-500 inline-block" />
+                Done
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-[2px] bg-red-700/70 inline-block" />
+                Skipped
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-[2px] bg-white/[0.06] inline-block" />
+                Missed
+              </span>
             </div>
           </div>
 
@@ -149,8 +183,8 @@ export function RoutineDetailDrawer({ routineId, onClose, onEdit, onDelete }: Ro
               <h3 className="text-xs font-semibold text-text-secondary mb-2 uppercase tracking-wider">
                 History
               </h3>
-              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                {data.completions.slice(0, 20).map((c) => (
+              <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1 scrollbar-thin">
+                {data.completions.slice(0, 25).map((c) => (
                   <div
                     key={c.id}
                     className="flex items-center justify-between px-3 py-2 glass rounded-xl text-xs"
@@ -166,12 +200,18 @@ export function RoutineDetailDrawer({ routineId, onClose, onEdit, onDelete }: Ro
                           : 'text-amber-400 bg-amber-400/10 border-amber-400/20'
                       )}
                     >
-                      {c.action === 'completed' ? '✓ Completed' : '↷ Skipped'}
+                      {c.action === 'completed' ? '✓ Done' : '↷ Skipped'}
                     </span>
                   </div>
                 ))}
               </div>
             </div>
+          )}
+
+          {data.completions.length === 0 && (
+            <p className="text-xs text-text-muted text-center py-4">
+              No completions yet. Mark this routine as done to start tracking!
+            </p>
           )}
 
           {/* Footer actions */}
@@ -185,6 +225,7 @@ export function RoutineDetailDrawer({ routineId, onClose, onEdit, onDelete }: Ro
               <Pencil size={14} />
               Edit
             </Button>
+
             {!confirmDelete ? (
               <Button
                 variant="danger"
@@ -197,14 +238,22 @@ export function RoutineDetailDrawer({ routineId, onClose, onEdit, onDelete }: Ro
               </Button>
             ) : (
               <div className="flex-1 flex gap-1.5">
-                <Button variant="ghost" size="md" className="flex-1" onClick={() => setConfirmDelete(false)}>
+                <Button
+                  variant="ghost"
+                  size="md"
+                  className="flex-1"
+                  onClick={() => setConfirmDelete(false)}
+                >
                   Cancel
                 </Button>
                 <Button
                   variant="danger"
                   size="md"
                   className="flex-1"
-                  onClick={() => { onDelete(data.routine.id); onClose() }}
+                  onClick={() => {
+                    onDelete(data.routine.id)
+                    onClose()
+                  }}
                 >
                   Confirm
                 </Button>

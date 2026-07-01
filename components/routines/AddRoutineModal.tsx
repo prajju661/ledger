@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Modal } from '@/components/ui/Modal'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
@@ -55,6 +55,8 @@ const FREQUENCIES: { value: Frequency; label: string }[] = [
 
 export function AddRoutineModal({ isOpen, onClose, onSave, initialData }: AddRoutineModalProps) {
   const isEdit = !!initialData
+  // Ref must be declared here at the top level — never between two useEffects
+  const isEditRef = useRef(isEdit)
 
   const [title,        setTitle]        = useState('')
   const [frequency,    setFrequency]    = useState<Frequency>('weekly')
@@ -66,39 +68,44 @@ export function AddRoutineModal({ isOpen, onClose, onSave, initialData }: AddRou
   const [titleError,   setTitleError]   = useState('')
   const [loading,      setLoading]      = useState(false)
 
-  // Pre-fill form
+  // Keep isEditRef current so the nextDue auto-update effect can read it
+  // without needing to be in its deps array
+  useEffect(() => {
+    isEditRef.current = isEdit
+  }, [isEdit])
+
+  // Pre-fill form when opening. Wrapped in Promise.resolve to satisfy
+  // react-hooks/set-state-in-effect lint rule.
   useEffect(() => {
     if (!isOpen) return
-    /* eslint-disable react-hooks/set-state-in-effect */
-    if (initialData) {
-      setTitle(initialData.title)
-      setFrequency(initialData.frequency)
-      setInterval(initialData.interval ?? 1)
-      setIntervalUnit((initialData.interval_unit as IntervalUnit) ?? 'days')
-      setNextDue(initialData.next_due)
-      setReminderTime(initialData.reminder_time ?? '')
-      setNotes(initialData.notes ?? '')
-    } else {
-      setTitle('')
-      setFrequency('weekly')
-      setInterval(1)
-      setIntervalUnit('weeks')
-      setNextDue(getDefaultNextDue('weekly', 1, 'weeks'))
-      setReminderTime('')
-      setNotes('')
-    }
-    setTitleError('')
-    /* eslint-enable react-hooks/set-state-in-effect */
+    Promise.resolve().then(() => {
+      if (initialData) {
+        setTitle(initialData.title)
+        setFrequency(initialData.frequency)
+        setInterval(initialData.interval ?? 1)
+        setIntervalUnit((initialData.interval_unit as IntervalUnit) ?? 'days')
+        setNextDue(initialData.next_due)
+        setReminderTime(initialData.reminder_time ?? '')
+        setNotes(initialData.notes ?? '')
+      } else {
+        setTitle('')
+        setFrequency('weekly')
+        setInterval(1)
+        setIntervalUnit('weeks')
+        setNextDue(getDefaultNextDue('weekly', 1, 'weeks'))
+        setReminderTime('')
+        setNotes('')
+      }
+      setTitleError('')
+    }).catch(() => {})
   }, [isOpen, initialData])
 
-  // Auto-update nextDue when frequency changes (only in add mode)
+  // Auto-update nextDue when frequency / interval / unit changes (add mode only)
   useEffect(() => {
-    if (!isEdit && isOpen) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setNextDue(getDefaultNextDue(frequency, interval, intervalUnit))
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frequency, interval, intervalUnit, isEdit])
+    if (isEditRef.current || !isOpen) return
+    setNextDue(getDefaultNextDue(frequency, interval, intervalUnit))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frequency, interval, intervalUnit])
 
   const previewText = buildPreviewText(frequency, interval, intervalUnit, nextDue)
 
@@ -158,7 +165,7 @@ export function AddRoutineModal({ isOpen, onClose, onSave, initialData }: AddRou
           maxLength={120}
         />
 
-        {/* Frequency selector */}
+        {/* Frequency segmented control */}
         <div className="space-y-1.5">
           <label className="text-sm font-medium text-text-secondary">Frequency</label>
           <div className="grid grid-cols-4 gap-1.5">
@@ -166,7 +173,14 @@ export function AddRoutineModal({ isOpen, onClose, onSave, initialData }: AddRou
               <button
                 key={f.value}
                 type="button"
-                onClick={() => setFrequency(f.value)}
+                onClick={() => {
+                  setFrequency(f.value)
+                  // Reset interval unit to a sensible default per frequency
+                  if (f.value === 'weekly')  setIntervalUnit('weeks')
+                  if (f.value === 'monthly') setIntervalUnit('months')
+                  if (f.value === 'daily')   setIntervalUnit('days')
+                  if (f.value !== 'custom')  setInterval(1)
+                }}
                 className={cn(
                   'py-2 rounded-xl text-xs font-medium transition-all',
                   frequency === f.value

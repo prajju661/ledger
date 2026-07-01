@@ -52,16 +52,40 @@ export async function GET(request: NextRequest, context: RouteContext) {
     const allCompletions: RoutineCompletion[] = completions ?? []
 
     // ── Streak calculation ────────────────────────────────────────────────────
-    // Walk backward, count consecutive 'completed' entries, skip 'skipped'
-    // but stop at any gap larger than expected interval
+    // A streak is the count of consecutive 'completed' entries from newest to
+    // oldest, where each pair of completions is no more than (interval * 2 + 1)
+    // days apart. 'skipped' entries do not count toward the streak but they do
+    // not break it. Any gap larger than the expected interval breaks the streak.
     let streak = 0
-    for (const c of allCompletions) {
-      if (c.action === 'completed') {
-        streak++
-      } else if (c.action === 'skipped') {
-        // skipped doesn't break streak but doesn't count
+    const intervalDays =
+      routine.frequency === 'daily'   ? 1
+      : routine.frequency === 'weekly'  ? (routine.interval ?? 1) * 7
+      : routine.frequency === 'monthly' ? (routine.interval ?? 1) * 31
+      : routine.frequency === 'custom'  ?
+          (routine.interval_unit === 'weeks'  ? (routine.interval ?? 1) * 7
+          : routine.interval_unit === 'months' ? (routine.interval ?? 1) * 31
+          : (routine.interval ?? 1))
+      : 1
+
+    // Allow double the interval as a gap tolerance
+    const gapToleranceDays = intervalDays * 2 + 1
+
+    // Filter to only 'completed' entries for gap analysis
+    const completedOnly = allCompletions.filter((c) => c.action === 'completed')
+
+    for (let i = 0; i < completedOnly.length; i++) {
+      if (i === 0) {
+        streak = 1
         continue
+      }
+      const prev    = new Date(completedOnly[i - 1].completed_at)
+      const current = new Date(completedOnly[i].completed_at)
+      const diffDays = Math.abs((prev.getTime() - current.getTime()) / (1000 * 60 * 60 * 24))
+
+      if (diffDays <= gapToleranceDays) {
+        streak++
       } else {
+        // Gap too large — streak ends here
         break
       }
     }

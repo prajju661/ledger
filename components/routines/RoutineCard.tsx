@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Check, SkipForward, MoreVertical, Pencil, Trash2,
@@ -9,10 +9,11 @@ import {
 import { GlassCard } from '@/components/ui/GlassCard'
 import { format, isPast, isToday, parseISO, addDays } from 'date-fns'
 import { cn } from '@/lib/utils'
+import { fadeInUp } from '@/lib/animations'
 import type { Routine } from '@/types'
 
 interface RoutineCardProps {
-  routine: Routine
+  routine:      Routine
   onComplete:   (id: string) => void
   onSkip:       (id: string) => void
   onEdit:       (routine: Routine) => void
@@ -30,23 +31,23 @@ function frequencyLabel(r: Routine): string {
   return 'Custom'
 }
 
-function getDueBadgeVariant(nextDue: string): { color: string; label: string } {
+function getDueBadge(nextDue: string): { color: string; label: string } {
   const dueDate = parseISO(nextDue)
   if (isPast(dueDate) && !isToday(dueDate)) return { color: '#ef4444', label: 'Overdue' }
-  if (isToday(dueDate)) return { color: '#f59e0b', label: 'Today' }
-  if (dueDate <= addDays(new Date(), 7)) return { color: '#10b981', label: format(dueDate, 'MMM d') }
+  if (isToday(dueDate))                     return { color: '#f59e0b', label: 'Today' }
+  if (dueDate <= addDays(new Date(), 7))    return { color: '#10b981', label: format(dueDate, 'MMM d') }
   return { color: '#64748b', label: format(dueDate, 'MMM d') }
 }
 
 function getAccentBarColor(nextDue: string): string {
   const dueDate = parseISO(nextDue)
   if (isPast(dueDate) && !isToday(dueDate)) return '#ef4444'
-  if (isToday(dueDate)) return '#f59e0b'
-  if (dueDate <= addDays(new Date(), 7)) return '#10b981'
+  if (isToday(dueDate))                     return '#f59e0b'
+  if (dueDate <= addDays(new Date(), 7))    return '#10b981'
   return '#334155'
 }
 
-const freqBadgeColor: Record<string, string> = {
+const FREQ_BADGE_COLOR: Record<string, string> = {
   daily:   '#3b82f6',
   weekly:  '#10b981',
   monthly: '#8b5cf6',
@@ -61,39 +62,71 @@ export function RoutineCard({
   onDelete,
   onViewDetail,
 }: RoutineCardProps) {
-  const [menuOpen,       setMenuOpen]       = useState(false)
-  const [confirmDelete,  setConfirmDelete]  = useState(false)
-  const [confirmSkip,    setConfirmSkip]    = useState(false)
-  const [completing,     setCompleting]     = useState(false)
+  const [menuOpen,      setMenuOpen]      = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [confirmSkip,   setConfirmSkip]   = useState(false)
+  const [completing,    setCompleting]    = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
 
-  const dueBadge = getDueBadgeVariant(routine.next_due)
+  const dueBadge    = getDueBadge(routine.next_due)
   const accentColor = getAccentBarColor(routine.next_due)
-  const freqColor = freqBadgeColor[routine.frequency] ?? '#64748b'
+  const freqColor   = FREQ_BADGE_COLOR[routine.frequency] ?? '#64748b'
 
-  const handleComplete = () => {
+  // Close menu on outside click
+  useEffect(() => {
+    if (!menuOpen) return
+    function handleOutsideClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false)
+        setConfirmDelete(false)
+        setConfirmSkip(false)
+      }
+    }
+    document.addEventListener('mousedown', handleOutsideClick)
+    return () => document.removeEventListener('mousedown', handleOutsideClick)
+  }, [menuOpen])
+
+  function handleCompleteClick() {
+    if (completing) return
     setCompleting(true)
-    // Trigger exit animation, then call onComplete
-    setTimeout(() => onComplete(routine.id), 350)
+    // Give the slide-out animation time to play, then notify parent
+    setTimeout(() => onComplete(routine.id), 400)
   }
 
   return (
+    // variants so parent staggerContainer propagates to each card
     <motion.div
       layout
-      animate={completing ? { x: 60, opacity: 0, height: 0, marginBottom: 0, transition: { duration: 0.4, ease: [0.4, 0, 0.2, 1] } } : {}}
-      initial={{ opacity: 0, y: 12 }}
-      exit={{ opacity: 0, x: 60, height: 0, transition: { duration: 0.3 } }}
+      variants={fadeInUp}
+      exit={{
+        opacity: 0,
+        x: 60,
+        height: 0,
+        marginBottom: 0,
+        paddingTop: 0,
+        paddingBottom: 0,
+        transition: { duration: 0.35, ease: [0.4, 0, 0.2, 1] },
+      }}
+      animate={completing ? {
+        x: 80,
+        opacity: 0,
+        height: 0,
+        marginBottom: 0,
+        transition: { duration: 0.35, ease: [0.4, 0, 0.2, 1] },
+      } : {}}
+      className="overflow-hidden"
     >
       <GlassCard accent="emerald" className="overflow-hidden">
         <div className="flex items-stretch">
-          {/* Left accent bar */}
+          {/* Left accent bar — urgency colour */}
           <div
             className="w-1 shrink-0 rounded-l-2xl"
             style={{ background: accentColor }}
           />
 
-          {/* Content */}
+          {/* Card content */}
           <div className="flex-1 p-4 min-w-0">
-            {/* Row 1: title + actions */}
+            {/* Row 1: title + frequency badge */}
             <div className="flex items-start gap-2 mb-2">
               <button
                 className="flex-1 text-left"
@@ -104,13 +137,12 @@ export function RoutineCard({
                 </h3>
               </button>
 
-              {/* Frequency badge */}
               <span
                 className="shrink-0 px-2 py-0.5 rounded-full text-[10px] font-semibold border"
                 style={{
-                  color: freqColor,
-                  background: `${freqColor}18`,
-                  borderColor: `${freqColor}30`,
+                  color:        freqColor,
+                  background:   `${freqColor}18`,
+                  borderColor:  `${freqColor}30`,
                 }}
               >
                 <RefreshCw size={8} className="inline mr-0.5 -mt-px" />
@@ -121,8 +153,10 @@ export function RoutineCard({
             {/* Row 2: due date */}
             <div className="flex items-center gap-1.5 text-xs text-text-secondary mb-1">
               <Calendar size={11} className="shrink-0" style={{ color: dueBadge.color }} />
-              <span>Due: </span>
-              <span style={{ color: dueBadge.color }} className="font-medium">{dueBadge.label}</span>
+              <span>Due:</span>
+              <span style={{ color: dueBadge.color }} className="font-medium">
+                {dueBadge.label}
+              </span>
             </div>
 
             {/* Row 3: reminder */}
@@ -139,11 +173,11 @@ export function RoutineCard({
             )}
           </div>
 
-          {/* Right action column */}
+          {/* Right: action buttons */}
           <div className="flex flex-col items-end justify-center gap-1.5 pr-4 shrink-0">
-            {/* ✓ Done */}
+            {/* ✓ Done button */}
             <button
-              onClick={handleComplete}
+              onClick={handleCompleteClick}
               disabled={completing}
               className={cn(
                 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
@@ -156,10 +190,14 @@ export function RoutineCard({
               Done
             </button>
 
-            {/* ⋮ More */}
-            <div className="relative">
+            {/* ⋮ More menu */}
+            <div className="relative" ref={menuRef}>
               <button
-                onClick={() => { setMenuOpen((o) => !o); setConfirmDelete(false); setConfirmSkip(false) }}
+                onClick={() => {
+                  setMenuOpen((o) => !o)
+                  setConfirmDelete(false)
+                  setConfirmSkip(false)
+                }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium glass text-text-muted hover:text-text-primary transition-colors"
               >
                 <MoreVertical size={12} />
@@ -169,14 +207,13 @@ export function RoutineCard({
               <AnimatePresence>
                 {menuOpen && (
                   <motion.div
-                    className="absolute right-0 bottom-8 z-30 glass-modal rounded-xl py-1.5 min-w-[148px]"
-                    initial={{ opacity: 0, scale: 0.92, y: 4 }}
+                    className="absolute right-0 bottom-full mb-1 z-30 glass-modal rounded-xl py-1.5 min-w-[148px]"
+                    initial={{ opacity: 0, scale: 0.92, y: 6 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.92, y: 4 }}
+                    exit={{ opacity: 0, scale: 0.92, y: 6 }}
                     transition={{ duration: 0.12 }}
-                    onMouseLeave={() => { if (!confirmDelete && !confirmSkip) setMenuOpen(false) }}
                   >
-                    {!confirmDelete && !confirmSkip ? (
+                    {!confirmDelete && !confirmSkip && (
                       <>
                         <button
                           onClick={() => { setMenuOpen(false); onEdit(routine) }}
@@ -201,7 +238,9 @@ export function RoutineCard({
                           Delete
                         </button>
                       </>
-                    ) : confirmSkip ? (
+                    )}
+
+                    {confirmSkip && (
                       <div className="px-3 py-2 space-y-2">
                         <p className="text-xs text-text-secondary">Skip this occurrence?</p>
                         <div className="flex gap-1.5">
@@ -212,14 +251,20 @@ export function RoutineCard({
                             Cancel
                           </button>
                           <button
-                            onClick={() => { setMenuOpen(false); setConfirmSkip(false); onSkip(routine.id) }}
+                            onClick={() => {
+                              setMenuOpen(false)
+                              setConfirmSkip(false)
+                              onSkip(routine.id)
+                            }}
                             className="flex-1 px-2 py-1 text-xs rounded-lg bg-amber-500/15 text-amber-400 hover:bg-amber-500/25"
                           >
                             Skip
                           </button>
                         </div>
                       </div>
-                    ) : (
+                    )}
+
+                    {confirmDelete && (
                       <div className="px-3 py-2 space-y-2">
                         <p className="text-xs text-text-secondary">Delete permanently?</p>
                         <div className="flex gap-1.5">
@@ -230,7 +275,11 @@ export function RoutineCard({
                             Cancel
                           </button>
                           <button
-                            onClick={() => { setMenuOpen(false); setConfirmDelete(false); onDelete(routine.id) }}
+                            onClick={() => {
+                              setMenuOpen(false)
+                              setConfirmDelete(false)
+                              onDelete(routine.id)
+                            }}
                             className="flex-1 px-2 py-1 text-xs rounded-lg bg-error/15 text-error hover:bg-error/25"
                           >
                             Delete
